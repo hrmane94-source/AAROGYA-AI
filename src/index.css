@@ -1,0 +1,66 @@
+@import "tailwindcss";
+
+@keyframes arogya-float {
+  0%, 100% {
+    transform: translateY(0px) rotate(0deg);
+  }
+  50% {
+    transform: translateY(-10px) rotate(1.2deg);
+  }
+}
+
+@keyframes arogya-shadow {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 0.35;
+  }
+  50% {
+    transform: scale(0.82);
+    opacity: 0.18;
+  }
+}
+
+@keyframes arogya-wave {
+  0%, 100% {
+    transform: rotate(0deg);
+  }
+  20% {
+    transform: rotate(-22deg);
+  }
+  40% {
+    transform: rotate(14deg);
+  }
+  60% {
+    transform: rotate(-16deg);
+  }
+  80% {
+    transform: rotate(8deg);
+  }
+}
+
+@keyframes arogya-ecg {
+  0% {
+    stroke-dashoffset: 120;
+  }
+  100% {
+    stroke-dashoffset: 0;
+  }
+}
+
+.animate-arogya-float {
+  animation: arogya-float 3.5s ease-in-out infinite;
+}
+
+.animate-arogya-shadow {
+  animation: arogya-shadow 3.5s ease-in-out infinite;
+}
+
+.animate-arogya-wave {
+  transform-origin: 122px 104px;
+  animation: arogya-wave 2.2s ease-in-out infinite;
+}
+
+.animate-arogya-ecg {
+  stroke-dasharray: 120;
+  animation: arogya-ecg 2.4s linear infinite;
+}

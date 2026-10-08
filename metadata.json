@@ -1,0 +1,6 @@
+{
+  "name": "Arogya AI - Predictive Hospital Bed Management",
+  "description": "ML-powered hospital bed demand forecasting, real-time occupancy management, shortage risk prediction, what-if simulations, OPD tokens, and emergency triage for healthcare operations.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
