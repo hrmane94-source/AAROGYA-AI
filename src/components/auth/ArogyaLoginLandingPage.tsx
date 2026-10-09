@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Calendar,
   Users,
@@ -22,7 +22,15 @@ import {
   Zap,
   FileText,
   Volume2,
-  UploadCloud
+  UploadCloud,
+  AlertTriangle,
+  CheckCircle2,
+  RefreshCw,
+  Clock,
+  Send,
+  Edit2,
+  ShieldCheck,
+  AlertCircle
 } from 'lucide-react';
 import hospitalCampusImg from '../../assets/images/hospital_campus_bg_1791432957328.jpg';
 import { UserRole, AuthUser, Hospital } from '../../types';
@@ -46,82 +54,304 @@ export const ArogyaLoginLandingPage: React.FC<ArogyaLoginLandingPageProps> = ({
   // Login method toggle: 'login' | 'otp'
   const [loginMethod, setLoginMethod] = useState<'login' | 'otp'>('login');
 
-  // Form states
+  // Form states - Password Login
   const [identifier, setIdentifier] = useState<string>('patient.demo@arogya.gov.in');
   const [password, setPassword] = useState<string>('••••••••••••');
-  const [otpPhone, setOtpPhone] = useState<string>('+91 98201 44552');
-  const [otpCode, setOtpCode] = useState<string>('884210');
   const [showPassword, setShowPassword] = useState<boolean>(false);
   const [rememberMe, setRememberMe] = useState<boolean>(true);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
-  const [showOtpSentBanner, setShowOtpSentBanner] = useState<boolean>(false);
+
+  // Real Mobile OTP Authentication State
+  const [countryCode, setCountryCode] = useState<string>('+91');
+  const [phoneInput, setPhoneInput] = useState<string>('9820144552');
+  const [otpCode, setOtpCode] = useState<string>('');
+  const [otpSent, setOtpSent] = useState<boolean>(false);
+  const [maskedPhone, setMaskedPhone] = useState<string>('');
+  const [resendCooldown, setResendCooldown] = useState<number>(0);
+  const [isSendingOtp, setIsSendingOtp] = useState<boolean>(false);
+  const [isVerifyingOtp, setIsVerifyingOtp] = useState<boolean>(false);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [authSuccess, setAuthSuccess] = useState<string | null>(null);
+  const [devOtpNotice, setDevOtpNotice] = useState<{ code: string; notice?: string } | null>(null);
+
+  // New Patient Self-Registration State (Triggered when phone is verified but unmapped)
+  const [requiresRegistration, setRequiresRegistration] = useState<boolean>(false);
+  const [registrationToken, setRegistrationToken] = useState<string>('');
+  const [verifiedPhone, setVerifiedPhone] = useState<string>('');
+  const [regFullName, setRegFullName] = useState<string>('Suhani Shambwani');
+  const [regAbhaId, setRegAbhaId] = useState<string>('91-4421-8890-1234');
+  const [regEmail, setRegEmail] = useState<string>('suhani.shambwani@gmail.com');
+  const [regGender, setRegGender] = useState<string>('Female');
+  const [regAge, setRegAge] = useState<string>('28');
+  const [isRegistering, setIsRegistering] = useState<boolean>(false);
+
+  // SMSLocal Gateway Status
+  const [gatewayStatus, setGatewayStatus] = useState<{
+    smsConfigured: boolean;
+    senderId: string;
+    route: string;
+    hasTemplateId: boolean;
+  } | null>(null);
+
+  // Cooldown countdown effect
+  useEffect(() => {
+    let timer: NodeJS.Timeout;
+    if (resendCooldown > 0) {
+      timer = setInterval(() => {
+        setResendCooldown((prev) => (prev > 0 ? prev - 1 : 0));
+      }, 1000);
+    }
+    return () => clearInterval(timer);
+  }, [resendCooldown]);
+
+  // Fetch gateway configuration status on mount
+  useEffect(() => {
+    fetch('/api/auth/status')
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.success) {
+          setGatewayStatus(data);
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   // When role changes, pre-fill representative credentials for smooth demo
   const handleRoleSelect = (role: 'patient' | 'doctor' | 'staff') => {
     setSelectedRole(role);
+    setAuthError(null);
+    setAuthSuccess(null);
     if (role === 'patient') {
-      setIdentifier('patient.demo@arogya.gov.in');
-      setPassword('Patient@Arogya2026');
-      setOtpPhone('+91 98201 44552');
+      setIdentifier('suhani.shambwani@gmail.com');
+      setPassword('Patient@Care2026');
+      setPhoneInput('9820144552');
     } else if (role === 'doctor') {
-      setIdentifier('dr.malhotra@arogya.gov.in');
-      setPassword('Doctor@Arogya2026');
-      setOtpPhone('+91 98201 88000');
+      setIdentifier('admin.vikram@arogya.health');
+      setPassword('Admin@BedMgmt2026');
+      setPhoneInput('9820188000');
     } else {
-      setIdentifier('staff.opd@arogya.gov.in');
-      setPassword('Staff@Arogya2026');
-      setOtpPhone('+91 98112 44331');
+      setIdentifier('nurse.anjali@arogya.health');
+      setPassword('Staff@Triage2026');
+      setPhoneInput('9811244331');
     }
   };
 
-  const handleLoginSubmit = (e: React.FormEvent) => {
+  // Helper to get normalized E.164 phone string
+  const getFullNormalizedPhone = () => {
+    const cleanDigits = phoneInput.replace(/\D/g, '');
+    if (countryCode === '+91') {
+      const tenDigits = cleanDigits.slice(-10);
+      return `+91${tenDigits}`;
+    }
+    return `${countryCode}${cleanDigits}`;
+  };
+
+  // 1. Send OTP via SMSLocal HTTP API on Express Server
+  const handleSendOtp = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (isSendingOtp || resendCooldown > 0) return;
+
+    setAuthError(null);
+    setAuthSuccess(null);
+
+    const clean = phoneInput.replace(/\D/g, '');
+    if (clean.length < 7) {
+      setAuthError('Please enter a valid mobile number (10 digits for India).');
+      return;
+    }
+
+    const fullPhone = getFullNormalizedPhone();
+    setIsSendingOtp(true);
+
+    try {
+      const res = await fetch('/api/auth/send-otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: fullPhone, purpose: 'LOGIN' }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok || !data.success) {
+        setAuthError(data.error || 'Failed to dispatch SMS via SMSLocal gateway.');
+      } else {
+        setOtpSent(true);
+        setMaskedPhone(data.maskedPhone || fullPhone);
+        setResendCooldown(data.cooldownSeconds || 60);
+        if (data.devOtp) {
+          setOtpCode(data.devOtp);
+          setDevOtpNotice({ code: data.devOtp, notice: data.dltNotice || data.warning });
+        } else {
+          setOtpCode('');
+          setDevOtpNotice(null);
+        }
+        setAuthSuccess(data.message || `Verification code sent to ${data.maskedPhone}.`);
+      }
+    } catch {
+      setAuthError('Network error connecting to SMS authentication service.');
+    } finally {
+      setIsSendingOtp(false);
+    }
+  };
+
+  // 2. Verify 6-digit OTP code on Server
+  const handleVerifyOtp = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isVerifyingOtp) return;
+
+    const trimmedOtp = otpCode.trim();
+    if (trimmedOtp.length !== 6) {
+      setAuthError('Please enter the full 6-digit verification code.');
+      return;
+    }
+
+    const fullPhone = getFullNormalizedPhone();
+    setIsVerifyingOtp(true);
+    setAuthError(null);
+    setAuthSuccess(null);
+
+    try {
+      const res = await fetch('/api/auth/verify-otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: fullPhone, otp: trimmedOtp }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok || !data.success) {
+        setAuthError(data.error || 'Verification failed.');
+        setIsVerifyingOtp(false);
+        return;
+      }
+
+      if (data.requiresRegistration) {
+        setRequiresRegistration(true);
+        setRegistrationToken(data.registrationToken);
+        setVerifiedPhone(data.phone || fullPhone);
+        setAuthSuccess('Mobile number verified! Please complete your patient profile.');
+        setIsVerifyingOtp(false);
+        return;
+      }
+
+      if (data.authenticated && data.user) {
+        onLoginSuccess(data.user);
+      }
+    } catch {
+      setAuthError('Network error during OTP verification.');
+    } finally {
+      setIsVerifyingOtp(false);
+    }
+  };
+
+  // 3. Register New Patient Profile (for first-time phone numbers)
+  const handleRegisterSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!regFullName.trim()) {
+      setAuthError('Full Name is required.');
+      return;
+    }
+
+    setIsRegistering(true);
+    setAuthError(null);
+
+    try {
+      const res = await fetch('/api/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          registrationToken,
+          phone: verifiedPhone || getFullNormalizedPhone(),
+          fullName: regFullName,
+          email: regEmail,
+          abhaId: regAbhaId,
+          gender: regGender,
+          age: regAge ? Number(regAge) : undefined,
+        }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok || !data.success) {
+        setAuthError(data.error || 'Failed to complete registration.');
+      } else if (data.authenticated && data.user) {
+        onLoginSuccess(data.user);
+      }
+    } catch {
+      setAuthError('Network error submitting registration.');
+    } finally {
+      setIsRegistering(false);
+    }
+  };
+
+  // 4. Password Login via Server Session
+  const handleLoginSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (loginMethod === 'otp') {
+      return handleVerifyOtp(e);
+    }
+
+    setIsSubmitting(true);
+    setAuthError(null);
+
+    try {
+      const res = await fetch('/api/auth/login-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          identifier,
+          password,
+          role: selectedRole,
+        }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok || !data.success) {
+        setAuthError(data.error || 'Invalid credentials.');
+      } else if (data.authenticated && data.user) {
+        onLoginSuccess(data.user);
+      }
+    } catch {
+      setAuthError('Network error during authentication.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  // 5. Persona Demo Fast Login via Real Server Session
+  const handleDemoQuickLogin = async (role: 'patient' | 'doctor' | 'staff') => {
+    handleRoleSelect(role);
+    setAuthError(null);
     setIsSubmitting(true);
 
-    setTimeout(() => {
+    try {
+      const demoEmail =
+        role === 'patient'
+          ? 'suhani.shambwani@gmail.com'
+          : role === 'doctor'
+          ? 'admin.vikram@arogya.health'
+          : 'nurse.anjali@arogya.health';
+
+      const res = await fetch('/api/auth/login-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          identifier: demoEmail,
+          password: 'demo',
+          role,
+        }),
+      });
+
+      const data = await res.json();
+      if (data.authenticated && data.user) {
+        onLoginSuccess(data.user);
+      }
+    } catch {
+      // Fallback
+    } finally {
       setIsSubmitting(false);
-
-      const targetRole: UserRole =
-        selectedRole === 'doctor'
-          ? 'admin'
-          : selectedRole === 'staff'
-          ? 'hospital_staff'
-          : 'patient';
-
-      const userName =
-        selectedRole === 'doctor'
-          ? 'Dr. Vikram Malhotra (Senior Consultant)'
-          : selectedRole === 'staff'
-          ? 'Anjali Nair (Hospital Queue Staff)'
-          : 'Suhani Shambwani (Patient)';
-
-      const user: AuthUser = {
-        id: `user-${selectedRole}-${Date.now()}`,
-        name: userName,
-        email: identifier.includes('@') ? identifier : `${identifier}@arogya.gov.in`,
-        phone: otpPhone,
-        role: targetRole,
-        hospitalId: hospitals[0]?.id || 'hosp-1',
-        hospitalName: hospitals[0]?.name || 'Government District Hospital & Medical College',
-        department:
-          selectedRole === 'doctor'
-            ? 'Cardiology & Outpatient Medicine'
-            : selectedRole === 'staff'
-            ? 'OPD Central Registration & Bed Triage'
-            : 'Outpatient Care',
-        designation:
-          selectedRole === 'doctor'
-            ? 'Senior Medical Officer'
-            : selectedRole === 'staff'
-            ? 'OPD & Bed Allocation Staff'
-            : 'Ayushman Registered Citizen',
-        badgeNumber: selectedRole !== 'patient' ? `GOV-MED-${Math.floor(1000 + Math.random() * 9000)}` : undefined,
-        abhaId: selectedRole === 'patient' ? '91-4421-8890-1234' : undefined,
-        isLoggedIn: true,
-      };
-
-      onLoginSuccess(user);
-    }, 500);
+    }
   };
 
   return (
@@ -578,7 +808,8 @@ export const ArogyaLoginLandingPage: React.FC<ArogyaLoginLandingPageProps> = ({
                   type="button"
                   onClick={() => {
                     setLoginMethod('otp');
-                    setShowOtpSentBanner(true);
+                    setAuthError(null);
+                    setAuthSuccess(null);
                   }}
                   className={`flex-1 py-1.5 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 ${
                     loginMethod === 'otp'
@@ -591,191 +822,487 @@ export const ArogyaLoginLandingPage: React.FC<ArogyaLoginLandingPageProps> = ({
                 </button>
               </div>
 
-              {/* FORM */}
-              <form onSubmit={handleLoginSubmit} className="space-y-3.5 text-xs">
-                {loginMethod === 'login' ? (
-                  <>
-                    {/* Input 1: Envelope icon, Mobile Number / Email, small helper text */}
-                    <div>
-                      <div className="relative">
-                        <Mail className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-                        <input
-                          type="text"
-                          required
-                          value={identifier}
-                          onChange={(e) => setIdentifier(e.target.value)}
-                          placeholder="Mobile Number / Email"
-                          className="w-full pl-10 pr-4 py-2.5 bg-slate-50/90 border border-slate-200 rounded-2xl text-xs text-slate-900 font-medium focus:outline-hidden focus:ring-2 focus:ring-sky-500 focus:bg-white transition"
-                        />
-                      </div>
-                      <p className="text-[10px] text-slate-500 mt-1 pl-1">
-                        Enter your registered mobile number or email ID
+              {/* Server Auth Error & Success Feedback Banners */}
+              {authError && (
+                <div className="p-3 bg-rose-50 border border-rose-200 rounded-2xl text-xs text-rose-800 flex items-start gap-2.5 animate-shake">
+                  <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                  <div className="flex-1">
+                    <p className="font-semibold">{authError}</p>
+                    {authError.includes('SMSLOCAL_API_KEY') && (
+                      <p className="text-[11px] text-rose-600 mt-1">
+                        Configure <code className="bg-rose-100 px-1 py-0.5 rounded font-mono">SMSLOCAL_API_KEY</code>, <code className="bg-rose-100 px-1 py-0.5 rounded font-mono">SMSLOCAL_SENDER_ID</code>, and <code className="bg-rose-100 px-1 py-0.5 rounded font-mono">SMSLOCAL_ROUTE=1</code> in your server environment variables.
                       </p>
-                    </div>
+                    )}
+                  </div>
+                </div>
+              )}
 
-                    {/* Input 2: Lock icon, Password, Eye visibility icon */}
-                    <div>
-                      <div className="relative">
-                        <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-                        <input
-                          type={showPassword ? 'text' : 'password'}
-                          required
-                          value={password}
-                          onChange={(e) => setPassword(e.target.value)}
-                          placeholder="Password"
-                          className="w-full pl-10 pr-10 py-2.5 bg-slate-50/90 border border-slate-200 rounded-2xl text-xs text-slate-900 font-medium focus:outline-hidden focus:ring-2 focus:ring-sky-500 focus:bg-white transition"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => setShowPassword(!showPassword)}
-                          className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5"
-                        >
-                          {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                        </button>
-                      </div>
-                    </div>
-                  </>
-                ) : (
-                  /* OTP Login Alternative View */
-                  <div className="space-y-3">
-                    <div>
-                      <div className="relative">
-                        <Smartphone className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-                        <input
-                          type="tel"
-                          required
-                          value={otpPhone}
-                          onChange={(e) => setOtpPhone(e.target.value)}
-                          placeholder="Mobile Number (10 digits)"
-                          className="w-full pl-10 pr-4 py-2.5 bg-slate-50/90 border border-slate-200 rounded-2xl text-xs text-slate-900 font-medium focus:outline-hidden focus:ring-2 focus:ring-sky-500"
-                        />
-                      </div>
-                      <p className="text-[10px] text-slate-500 mt-1 pl-1">
-                        6-digit one-time code will be sent via government SMS gateway
-                      </p>
-                    </div>
+              {authSuccess && (
+                <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-2xl text-xs text-emerald-800 flex items-center gap-2.5">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <p className="font-semibold">{authSuccess}</p>
+                </div>
+              )}
 
+              {/* REGISTRATION FORM (Triggered when phone is verified but unregistered) */}
+              {requiresRegistration ? (
+                <form onSubmit={handleRegisterSubmit} className="space-y-3.5 text-xs">
+                  <div className="p-3 bg-sky-50/70 border border-sky-200 rounded-2xl">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-sky-950 flex items-center gap-1.5">
+                        <ShieldCheck className="w-4 h-4 text-emerald-600" />
+                        <span>Phone Number Verified</span>
+                      </span>
+                      <span className="font-mono font-bold text-sky-800 text-[11px]">
+                        {verifiedPhone || getFullNormalizedPhone()}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-500 mt-1">
+                      Complete your patient profile to establish your secure Arogya health record.
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="font-bold text-slate-700 block mb-1">
+                      Full Name <span className="text-rose-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={regFullName}
+                      onChange={(e) => setRegFullName(e.target.value)}
+                      placeholder="e.g. Suhani Shambwani"
+                      className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-2xl text-xs text-slate-900 font-medium focus:outline-hidden focus:ring-2 focus:ring-sky-500 focus:bg-white"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
                     <div>
+                      <label className="font-bold text-slate-700 block mb-1">
+                        Age
+                      </label>
                       <input
-                        type="text"
-                        required
-                        value={otpCode}
-                        onChange={(e) => setOtpCode(e.target.value)}
-                        placeholder="Enter 6-digit OTP (Demo: 884210)"
-                        className="w-full px-4 py-2.5 bg-slate-50/90 border border-slate-200 rounded-2xl text-xs font-mono font-bold tracking-widest text-slate-900 text-center focus:outline-hidden focus:ring-2 focus:ring-sky-500"
+                        type="number"
+                        min="1"
+                        max="120"
+                        value={regAge}
+                        onChange={(e) => setRegAge(e.target.value)}
+                        placeholder="e.g. 28"
+                        className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-2xl text-xs text-slate-900 font-medium focus:outline-hidden focus:ring-2 focus:ring-sky-500"
                       />
                     </div>
+                    <div>
+                      <label className="font-bold text-slate-700 block mb-1">
+                        Gender
+                      </label>
+                      <select
+                        value={regGender}
+                        onChange={(e) => setRegGender(e.target.value)}
+                        className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-2xl text-xs text-slate-900 font-medium focus:outline-hidden focus:ring-2 focus:ring-sky-500"
+                      >
+                        <option value="Female">Female</option>
+                        <option value="Male">Male</option>
+                        <option value="Other">Other</option>
+                      </select>
+                    </div>
                   </div>
-                )}
 
-                {/* Below: Checkbox Remember me | Forgot password? */}
-                <div className="flex items-center justify-between pt-0.5 text-xs">
-                  <label className="flex items-center gap-2 cursor-pointer text-slate-600 select-none">
+                  <div>
+                    <label className="font-bold text-slate-700 block mb-1">
+                      ABHA Health ID (Ayushman Bharat) <span className="text-slate-400 font-normal">(Optional)</span>
+                    </label>
                     <input
-                      type="checkbox"
-                      checked={rememberMe}
-                      onChange={(e) => setRememberMe(e.target.checked)}
-                      className="w-4 h-4 rounded text-sky-600 focus:ring-sky-500 accent-sky-600"
+                      type="text"
+                      value={regAbhaId}
+                      onChange={(e) => setRegAbhaId(e.target.value)}
+                      placeholder="e.g. 91-4421-8890-1234"
+                      className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-2xl text-xs text-slate-900 font-mono font-medium focus:outline-hidden focus:ring-2 focus:ring-sky-500"
                     />
-                    <span className="font-medium text-[11px]">Remember me</span>
-                  </label>
+                  </div>
+
+                  <div>
+                    <label className="font-bold text-slate-700 block mb-1">
+                      Email Address <span className="text-slate-400 font-normal">(Optional)</span>
+                    </label>
+                    <input
+                      type="email"
+                      value={regEmail}
+                      onChange={(e) => setRegEmail(e.target.value)}
+                      placeholder="e.g. patient@example.com"
+                      className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-2xl text-xs text-slate-900 font-medium focus:outline-hidden focus:ring-2 focus:ring-sky-500"
+                    />
+                  </div>
 
                   <button
-                    type="button"
-                    onClick={() => alert('Password reset verification link has been sent to your registered email.')}
-                    className="text-[11px] font-semibold text-sky-700 hover:text-sky-900 hover:underline"
+                    type="submit"
+                    disabled={isRegistering}
+                    className="w-full py-3.5 rounded-2xl bg-linear-to-r from-cyan-600 via-sky-600 to-indigo-600 hover:from-cyan-700 hover:to-indigo-700 text-white font-extrabold text-sm shadow-lg shadow-sky-600/25 transition-all flex items-center justify-center gap-2"
                   >
-                    Forgot password?
+                    {isRegistering ? (
+                      <>
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                        <span>Creating Account...</span>
+                      </>
+                    ) : (
+                      <>
+                        <span>Complete Registration & Enter</span>
+                        <ArrowRight className="w-4 h-4" />
+                      </>
+                    )}
                   </button>
-                </div>
 
-                {/* PRIMARY BUTTON: Large rounded button: Arrow icon “Login” */}
-                <button
-                  type="submit"
-                  disabled={isSubmitting}
-                  className="w-full py-3.5 rounded-2xl bg-linear-to-r from-cyan-600 via-sky-600 to-indigo-600 hover:from-cyan-700 hover:to-indigo-700 active:scale-[0.99] text-white font-extrabold text-sm shadow-lg shadow-sky-600/25 transition-all flex items-center justify-center gap-2"
-                >
-                  <span>{isSubmitting ? 'Authenticating...' : 'Login'}</span>
-                  <ArrowRight className="w-4 h-4 stroke-[2.5]" />
-                </button>
-
-                {/* Below: small “OR” divider */}
-                <div className="relative flex items-center justify-center my-2">
-                  <div className="w-full border-t border-slate-200" />
-                  <span className="bg-white px-3 text-[10px] font-bold text-slate-400 uppercase tracking-widest absolute">
-                    OR
-                  </span>
-                </div>
-
-                {/* SECONDARY BUTTON: Outlined button: OTP/phone icon “Login with OTP” */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setLoginMethod(loginMethod === 'login' ? 'otp' : 'login');
-                  }}
-                  className="w-full py-3 rounded-2xl bg-slate-50 hover:bg-sky-50/60 text-slate-800 font-bold text-xs border border-slate-200 transition-all flex items-center justify-center gap-2 shadow-2xs"
-                >
-                  <Smartphone className="w-4 h-4 text-sky-600" />
-                  <span>{loginMethod === 'login' ? 'Login with OTP' : 'Login with Password'}</span>
-                </button>
-
-                {/* BOTTOM OF LOGIN CARD: “New here?” “Create an account →” */}
-                <div className="text-center pt-2 text-xs text-slate-500">
-                  <span>New here? </span>
                   <button
                     type="button"
                     onClick={() => {
-                      handleRoleSelect('patient');
-                      handleLoginSubmit({ preventDefault: () => {} } as any);
+                      setRequiresRegistration(false);
+                      setOtpSent(false);
+                      setOtpCode('');
                     }}
-                    className="font-bold text-sky-700 hover:text-sky-900 hover:underline"
+                    className="w-full text-center text-xs text-slate-500 hover:text-slate-700 py-1"
                   >
-                    Create an account →
+                    ← Back to Phone Number
                   </button>
-                </div>
+                </form>
+              ) : (
+                /* STANDARD LOGIN FORM */
+                <form onSubmit={handleLoginSubmit} className="space-y-3.5 text-xs">
+                  {loginMethod === 'login' ? (
+                    <>
+                      {/* Input 1: Envelope icon, Mobile Number / Email */}
+                      <div>
+                        <div className="relative">
+                          <Mail className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                          <input
+                            type="text"
+                            required
+                            value={identifier}
+                            onChange={(e) => setIdentifier(e.target.value)}
+                            placeholder="Mobile Number / Email"
+                            className="w-full pl-10 pr-4 py-2.5 bg-slate-50/90 border border-slate-200 rounded-2xl text-xs text-slate-900 font-medium focus:outline-hidden focus:ring-2 focus:ring-sky-500 focus:bg-white transition"
+                          />
+                        </div>
+                        <p className="text-[10px] text-slate-500 mt-1 pl-1">
+                          Enter registered mobile number or email ID
+                        </p>
+                      </div>
 
-                {/* Quick 1-Click Evaluation Logins */}
-                <div className="pt-2 border-t border-slate-100 space-y-1.5">
-                  <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center justify-between">
-                    <span>⚡ Quick Demo Logins</span>
-                    <span className="text-[9px] text-sky-600 font-medium">Instant Access</span>
+                      {/* Input 2: Lock icon, Password */}
+                      <div>
+                        <div className="relative">
+                          <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                          <input
+                            type={showPassword ? 'text' : 'password'}
+                            required
+                            value={password}
+                            onChange={(e) => setPassword(e.target.value)}
+                            placeholder="Password"
+                            className="w-full pl-10 pr-10 py-2.5 bg-slate-50/90 border border-slate-200 rounded-2xl text-xs text-slate-900 font-medium focus:outline-hidden focus:ring-2 focus:ring-sky-500 focus:bg-white transition"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setShowPassword(!showPassword)}
+                            className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5"
+                          >
+                            {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-between pt-0.5 text-xs">
+                        <label className="flex items-center gap-2 cursor-pointer text-slate-600 select-none">
+                          <input
+                            type="checkbox"
+                            checked={rememberMe}
+                            onChange={(e) => setRememberMe(e.target.checked)}
+                            className="w-4 h-4 rounded text-sky-600 focus:ring-sky-500 accent-sky-600"
+                          />
+                          <span className="font-medium text-[11px]">Remember me</span>
+                        </label>
+
+                        <button
+                          type="button"
+                          onClick={() => alert('Password reset verification link has been sent to your registered email.')}
+                          className="text-[11px] font-semibold text-sky-700 hover:text-sky-900 hover:underline"
+                        >
+                          Forgot password?
+                        </button>
+                      </div>
+
+                      {/* PRIMARY BUTTON: Login */}
+                      <button
+                        type="submit"
+                        disabled={isSubmitting}
+                        className="w-full py-3.5 rounded-2xl bg-linear-to-r from-cyan-600 via-sky-600 to-indigo-600 hover:from-cyan-700 hover:to-indigo-700 active:scale-[0.99] text-white font-extrabold text-sm shadow-lg shadow-sky-600/25 transition-all flex items-center justify-center gap-2"
+                      >
+                        {isSubmitting ? (
+                          <>
+                            <RefreshCw className="w-4 h-4 animate-spin" />
+                            <span>Authenticating...</span>
+                          </>
+                        ) : (
+                          <>
+                            <span>Login</span>
+                            <ArrowRight className="w-4 h-4 stroke-[2.5]" />
+                          </>
+                        )}
+                      </button>
+                    </>
+                  ) : (
+                    /* OTP LOGIN FLOW (Real SMSLocal Integration) */
+                    <div className="space-y-3.5">
+                      {/* Step 1: Mobile Number Input with Country Code */}
+                      <div>
+                        <label className="font-bold text-slate-700 block mb-1">
+                          Mobile Number
+                        </label>
+                        <div className="flex gap-2">
+                          {/* Country Code Selector */}
+                          <div className="relative w-28 shrink-0">
+                            <select
+                              value={countryCode}
+                              onChange={(e) => {
+                                setCountryCode(e.target.value);
+                                setOtpSent(false);
+                              }}
+                              className="w-full py-2.5 px-2 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-bold text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-sky-500"
+                            >
+                              <option value="+91">🇮🇳 +91 (IN)</option>
+                              <option value="+1">🇺🇸 +1 (US)</option>
+                              <option value="+44">🇬🇧 +44 (UK)</option>
+                              <option value="+971">🇦🇪 +971 (AE)</option>
+                              <option value="+65">🇸🇬 +65 (SG)</option>
+                              <option value="+61">🇦🇺 +61 (AU)</option>
+                            </select>
+                          </div>
+
+                          {/* Phone digits input */}
+                          <div className="relative flex-1">
+                            <Smartphone className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                            <input
+                              type="tel"
+                              required
+                              value={phoneInput}
+                              onChange={(e) => {
+                                setPhoneInput(e.target.value);
+                                if (otpSent) setOtpSent(false);
+                              }}
+                              placeholder="10-digit mobile number"
+                              className="w-full pl-10 pr-3 py-2.5 bg-slate-50/90 border border-slate-200 rounded-2xl text-xs text-slate-900 font-mono font-medium tracking-wider focus:outline-hidden focus:ring-2 focus:ring-sky-500"
+                            />
+                          </div>
+
+                          {/* Send / Resend OTP Action Button */}
+                          <button
+                            type="button"
+                            onClick={handleSendOtp}
+                            disabled={isSendingOtp || resendCooldown > 0}
+                            className={`px-3 py-2.5 rounded-2xl text-xs font-bold shrink-0 transition flex items-center gap-1.5 shadow-2xs ${
+                              resendCooldown > 0
+                                ? 'bg-slate-100 text-slate-400 cursor-not-allowed border border-slate-200'
+                                : 'bg-slate-900 hover:bg-slate-800 text-white active:scale-95'
+                            }`}
+                            title={resendCooldown > 0 ? `Please wait ${resendCooldown}s` : 'Send OTP via SMSLocal'}
+                          >
+                            {isSendingOtp ? (
+                              <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                            ) : (
+                              <Send className="w-3.5 h-3.5" />
+                            )}
+                            <span>{otpSent ? (resendCooldown > 0 ? `${resendCooldown}s` : 'Resend') : 'Send OTP'}</span>
+                          </button>
+                        </div>
+
+                        <p className="text-[10px] text-slate-500 mt-1 pl-1 flex items-center justify-between">
+                          <span>Secure 6-digit verification code sent via SMSLocal gateway</span>
+                          <span className="text-sky-700 font-medium">E.164: {getFullNormalizedPhone()}</span>
+                        </p>
+                      </div>
+
+                      {/* Step 2: 6-Digit OTP Verification Box (Displayed once OTP is dispatched) */}
+                      {otpSent && (
+                        <div className="p-4 bg-sky-50/60 rounded-2xl border border-sky-200/80 space-y-3 animate-fadeIn">
+                          {devOtpNotice && (
+                            <div className="p-2.5 bg-amber-50/90 border border-amber-200 rounded-xl text-xs space-y-1 animate-fadeIn">
+                              <div className="flex items-center justify-between">
+                                <span className="font-bold text-amber-950 flex items-center gap-1.5">
+                                  <Sparkles className="w-3.5 h-3.5 text-amber-600" />
+                                  <span>SMS Gateway Notice</span>
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => setOtpCode(devOtpNotice.code)}
+                                  className="px-2 py-0.5 rounded-lg bg-amber-200 hover:bg-amber-300 text-amber-950 font-mono font-bold text-[11px] transition shadow-2xs"
+                                >
+                                  Fill OTP: {devOtpNotice.code}
+                                </button>
+                              </div>
+                              <p className="text-[11px] text-amber-800 leading-snug">
+                                {devOtpNotice.notice}
+                              </p>
+                            </div>
+                          )}
+
+                          <div className="flex items-center justify-between text-xs">
+                            <span className="font-extrabold text-sky-950">Enter 6-Digit Verification Code</span>
+                            <span className="text-[11px] font-bold text-sky-700 flex items-center gap-1 font-mono">
+                              <Clock className="w-3 h-3" />
+                              <span>5m expiry</span>
+                            </span>
+                          </div>
+
+                          <div className="relative">
+                            <input
+                              type="text"
+                              maxLength={6}
+                              autoFocus
+                              value={otpCode}
+                              onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, ''))}
+                              placeholder="• • • • • •"
+                              className="w-full py-3 px-4 bg-white border border-sky-300 rounded-2xl text-center text-xl font-black font-mono tracking-[0.5em] text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-sky-500 shadow-inner"
+                            />
+                          </div>
+
+                          <div className="flex items-center justify-between text-[11px] text-slate-500 pt-0.5">
+                            <span className="text-slate-600">
+                              Dispatched to: <strong>{maskedPhone || getFullNormalizedPhone()}</strong>
+                            </span>
+                            {resendCooldown > 0 ? (
+                              <span className="text-slate-400 font-medium">
+                                Resend in <strong className="text-slate-700">{resendCooldown}s</strong>
+                              </span>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={handleSendOtp}
+                                disabled={isSendingOtp}
+                                className="font-bold text-sky-700 hover:text-sky-900 hover:underline"
+                              >
+                                Resend OTP Now
+                              </button>
+                            )}
+                          </div>
+
+                          {/* Verify & Enter Button */}
+                          <button
+                            type="button"
+                            onClick={handleVerifyOtp}
+                            disabled={isVerifyingOtp || otpCode.length !== 6}
+                            className={`w-full py-3 rounded-xl font-extrabold text-xs shadow-md transition flex items-center justify-center gap-2 ${
+                              otpCode.length === 6 && !isVerifyingOtp
+                                ? 'bg-sky-600 hover:bg-sky-700 text-white shadow-sky-600/25 active:scale-[0.99]'
+                                : 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                            }`}
+                          >
+                            {isVerifyingOtp ? (
+                              <>
+                                <RefreshCw className="w-4 h-4 animate-spin" />
+                                <span>Verifying OTP on Server...</span>
+                              </>
+                            ) : (
+                              <>
+                                <CheckCircle2 className="w-4 h-4" />
+                                <span>Verify OTP & Enter</span>
+                              </>
+                            )}
+                          </button>
+                        </div>
+                      )}
+
+                      {!otpSent && (
+                        <button
+                          type="button"
+                          onClick={handleSendOtp}
+                          disabled={isSendingOtp}
+                          className="w-full py-3.5 rounded-2xl bg-linear-to-r from-cyan-600 via-sky-600 to-indigo-600 hover:from-cyan-700 hover:to-indigo-700 active:scale-[0.99] text-white font-extrabold text-sm shadow-lg shadow-sky-600/25 transition-all flex items-center justify-center gap-2"
+                        >
+                          {isSendingOtp ? (
+                            <>
+                              <RefreshCw className="w-4 h-4 animate-spin" />
+                              <span>Sending OTP via SMSLocal...</span>
+                            </>
+                          ) : (
+                            <>
+                              <span>Send Verification OTP</span>
+                              <ArrowRight className="w-4 h-4 stroke-[2.5]" />
+                            </>
+                          )}
+                        </button>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Below: small “OR” divider */}
+                  <div className="relative flex items-center justify-center my-2">
+                    <div className="w-full border-t border-slate-200" />
+                    <span className="bg-white px-3 text-[10px] font-bold text-slate-400 uppercase tracking-widest absolute">
+                      OR
+                    </span>
                   </div>
-                  <div className="grid grid-cols-3 gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        handleRoleSelect('patient');
-                        setTimeout(() => handleLoginSubmit({ preventDefault: () => {} } as any), 50);
-                      }}
-                      className="py-1 px-1.5 rounded-lg bg-sky-50 hover:bg-sky-100 text-sky-800 text-[10px] font-bold border border-sky-200 transition truncate"
-                      title="Login immediately as Patient (Suhani Shambwani)"
-                    >
-                      👤 Patient
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        handleRoleSelect('doctor');
-                        setTimeout(() => handleLoginSubmit({ preventDefault: () => {} } as any), 50);
-                      }}
-                      className="py-1 px-1.5 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-800 text-[10px] font-bold border border-indigo-200 transition truncate"
-                      title="Login immediately as Doctor (Dr. Vikram Malhotra)"
-                    >
-                      🩺 Doctor
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        handleRoleSelect('staff');
-                        setTimeout(() => handleLoginSubmit({ preventDefault: () => {} } as any), 50);
-                      }}
-                      className="py-1 px-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-800 text-[10px] font-bold border border-slate-300 transition truncate"
-                      title="Login immediately as Hospital Staff (Anjali Nair)"
-                    >
-                      🏥 Staff
-                    </button>
+
+                  {/* SECONDARY BUTTON: Toggle Login Mode */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setLoginMethod(loginMethod === 'login' ? 'otp' : 'login');
+                      setAuthError(null);
+                      setAuthSuccess(null);
+                    }}
+                    className="w-full py-2.5 rounded-2xl bg-slate-50 hover:bg-sky-50/60 text-slate-800 font-bold text-xs border border-slate-200 transition-all flex items-center justify-center gap-2 shadow-2xs"
+                  >
+                    <Smartphone className="w-4 h-4 text-sky-600" />
+                    <span>{loginMethod === 'login' ? 'Switch to Mobile OTP Login' : 'Switch to Password Login'}</span>
+                  </button>
+
+                  {/* Gateway Status Badge */}
+                  <div className="text-center pt-1">
+                    {gatewayStatus?.smsConfigured ? (
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                        <span>SMSLocal Live Gateway Connected (Route {gatewayStatus.route} • {gatewayStatus.senderId})</span>
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-200">
+                        <AlertCircle className="w-3 h-3 text-amber-600" />
+                        <span>SMSLocal Route 1 Ready • Set SMSLOCAL_API_KEY for live delivery</span>
+                      </span>
+                    )}
                   </div>
-                </div>
+
+                  {/* Quick 1-Click Evaluation Logins (Established via Real Server Sessions) */}
+                  <div className="pt-2 border-t border-slate-100 space-y-1.5">
+                    <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center justify-between">
+                      <span>⚡ Quick Persona Logins</span>
+                      <span className="text-[9px] text-sky-600 font-medium">Server Session Verified</span>
+                    </div>
+                    <div className="grid grid-cols-3 gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => handleDemoQuickLogin('patient')}
+                        className="py-1 px-1.5 rounded-lg bg-sky-50 hover:bg-sky-100 text-sky-800 text-[10px] font-bold border border-sky-200 transition truncate"
+                        title="Login as Patient (Suhani Shambwani)"
+                      >
+                        👤 Patient
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDemoQuickLogin('doctor')}
+                        className="py-1 px-1.5 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-800 text-[10px] font-bold border border-indigo-200 transition truncate"
+                        title="Login as Doctor (Dr. Vikram Malhotra)"
+                      >
+                        🩺 Doctor
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDemoQuickLogin('staff')}
+                        className="py-1 px-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-800 text-[10px] font-bold border border-slate-300 transition truncate"
+                        title="Login as Hospital Staff (Anjali Nair)"
+                      >
+                        🏥 Staff
+                      </button>
+                    </div>
+                  </div>
+                </form>
+              )}
 
                 {/* AI Health Report Assistant Spotlight */}
                 {onOpenReportAssistant && (
@@ -804,7 +1331,6 @@ export const ArogyaLoginLandingPage: React.FC<ArogyaLoginLandingPageProps> = ({
                     </button>
                   </div>
                 )}
-              </form>
             </div>
           </div>
         </div>

@@ -25,7 +25,10 @@ import {
   Check,
   Headphones,
   Maximize2,
-  X
+  X,
+  ShieldCheck,
+  Lock,
+  Download
 } from 'lucide-react';
 import {
   MedicalReportAnalysis,
@@ -36,6 +39,7 @@ import {
 } from '../../types';
 import { SAMPLE_REPORTS } from '../../data/sampleReports';
 import { ArogyaRobot } from '../common/ArogyaRobot';
+import { EhrExportModal } from './EhrExportModal';
 
 interface AIReportAssistantProps {
   onEmergencyClick: () => void;
@@ -56,6 +60,7 @@ export const AIReportAssistant: React.FC<AIReportAssistantProps> = ({
   const [isAnalyzing, setIsAnalyzing] = useState<boolean>(false);
   const [uploadedPreview, setUploadedPreview] = useState<string | null>(SAMPLE_REPORTS[0].mockAnalysis.imageUrl || null);
   const [fullImageModal, setFullImageModal] = useState<boolean>(false);
+  const [isEhrExportOpen, setIsEhrExportOpen] = useState<boolean>(false);
 
   // Audio / Speech State
   const [isPlayingAudio, setIsPlayingAudio] = useState<boolean>(false);
@@ -63,6 +68,7 @@ export const AIReportAssistant: React.FC<AIReportAssistantProps> = ({
   const [playbackSpeed, setPlaybackSpeed] = useState<number>(1.0);
   const [audioProgress, setAudioProgress] = useState<number>(0);
   const speechUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
+  const speechTimerRef = useRef<any>(null);
 
   // Chat State
   const [currentlySpeakingChatMsgId, setCurrentlySpeakingChatMsgId] = useState<string | null>(null);
@@ -116,6 +122,7 @@ You can ask me **any health-related question** about your test values, medical t
       .replace(/\[.*?\]\(.*?\)/g, '')
       .replace(/`{1,3}.*?`{1,3}/g, '')
       .replace(/[\n\r]+/g, '. ')
+      .replace(/\s+/g, ' ')
       .trim();
   };
 
@@ -126,12 +133,19 @@ You can ask me **any health-related question** about your test values, medical t
       return;
     }
 
+    // Immediately stop any existing speech before starting a new playback session
+    if (window.speechSynthesis) {
+      window.speechSynthesis.cancel();
+    }
+    if (speechTimerRef.current) {
+      clearInterval(speechTimerRef.current);
+      speechTimerRef.current = null;
+    }
+
     const langToUse = customLang || selectedLanguage;
     const rawText = overrideScript || (analysis ? getSpokenScript(langToUse, analysis) : '');
     if (!rawText) return;
     const textToSpeak = cleanScriptForSpeech(rawText);
-
-    window.speechSynthesis.cancel();
 
     const utterance = new SpeechSynthesisUtterance(textToSpeak);
     utterance.rate = playbackSpeed;
@@ -153,29 +167,41 @@ You can ask me **any health-related question** about your test values, medical t
       if (msgId) setCurrentlySpeakingChatMsgId(msgId);
     };
 
+    // Play exactly once - do not automatically restart playback after it finishes
     utterance.onend = () => {
       setIsPlayingAudio(false);
       setIsPausedAudio(false);
       setAudioProgress(100);
       setCurrentlySpeakingChatMsgId(null);
+      if (speechTimerRef.current) {
+        clearInterval(speechTimerRef.current);
+        speechTimerRef.current = null;
+      }
     };
 
     utterance.onerror = (e) => {
-      console.warn('Speech synthesis error:', e);
+      console.warn('Speech synthesis cancelled or encountered an error:', e);
       setIsPlayingAudio(false);
       setIsPausedAudio(false);
       setCurrentlySpeakingChatMsgId(null);
+      if (speechTimerRef.current) {
+        clearInterval(speechTimerRef.current);
+        speechTimerRef.current = null;
+      }
     };
 
-    // Simulated progress tick
+    // Simulated progress tick (non-repetitive timer)
     let progress = 0;
     const estDurationSec = (textToSpeak.split(' ').length / (2.5 * playbackSpeed)) * 1000;
     const intervalTime = 200;
-    const progressStep = (intervalTime / estDurationSec) * 100;
+    const progressStep = (intervalTime / Math.max(estDurationSec, 5000)) * 100;
 
-    const progInterval = setInterval(() => {
+    speechTimerRef.current = setInterval(() => {
       if (!window.speechSynthesis.speaking || window.speechSynthesis.paused) {
-        clearInterval(progInterval);
+        if (speechTimerRef.current) {
+          clearInterval(speechTimerRef.current);
+          speechTimerRef.current = null;
+        }
         return;
       }
       progress = Math.min(99, progress + progressStep);
@@ -201,8 +227,12 @@ You can ask me **any health-related question** about your test values, medical t
   };
 
   const stopAudio = () => {
-    if (window.speechSynthesis) {
+    if (typeof window !== 'undefined' && window.speechSynthesis) {
       window.speechSynthesis.cancel();
+    }
+    if (speechTimerRef.current) {
+      clearInterval(speechTimerRef.current);
+      speechTimerRef.current = null;
     }
     setIsPlayingAudio(false);
     setIsPausedAudio(false);
@@ -504,6 +534,12 @@ You can ask me **any health-related question** about your test values, medical t
             <p className="text-xs text-slate-500 mt-0.5">
               Supports JPEG, PNG, or PDF images of blood tests, lipid panels, ECGs, X-Rays, or prescriptions.
             </p>
+            <div className="inline-flex items-center gap-2 mt-2 px-3 py-1.5 rounded-xl bg-emerald-50/90 border border-emerald-200/80 text-[11px] text-emerald-800 font-medium">
+              <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+              <span>
+                <strong>Confidential & Secure:</strong> This system is securely encrypted and no personal health data or scanned reports are stored.
+              </span>
+            </div>
           </div>
 
           <label className="px-5 py-2.5 rounded-xl bg-sky-600 hover:bg-sky-700 text-white text-xs font-bold shadow-md shadow-sky-600/20 transition cursor-pointer flex items-center justify-center gap-2 shrink-0">
@@ -609,13 +645,26 @@ You can ask me **any health-related question** about your test values, medical t
               {/* Quick AI Voice Trigger Button */}
               <button
                 onClick={() => {
+                  stopAudio();
                   setActiveViewMode('LISTEN');
                   startVoiceNarration();
                 }}
-                className="w-full py-3 rounded-2xl bg-linear-to-r from-teal-600 to-sky-600 hover:from-teal-700 hover:to-sky-700 text-white text-xs font-bold shadow-md shadow-sky-600/20 transition flex items-center justify-center gap-2"
+                disabled={isPlayingAudio}
+                className={`w-full py-3 rounded-2xl bg-linear-to-r from-teal-600 to-sky-600 hover:from-teal-700 hover:to-sky-700 text-white text-xs font-bold shadow-md shadow-sky-600/20 transition flex items-center justify-center gap-2 ${
+                  isPlayingAudio ? 'opacity-70 cursor-not-allowed' : ''
+                }`}
               >
                 <Headphones className="w-4 h-4" />
-                <span>Listen to AI Voice Explanation</span>
+                <span>{isPlayingAudio ? 'Speaking Summary...' : 'Listen to AI Voice Explanation'}</span>
+              </button>
+
+              {/* Standardized EHR Export Button (PDF & FHIR R4) */}
+              <button
+                onClick={() => setIsEhrExportOpen(true)}
+                className="w-full py-2.5 rounded-2xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold shadow-xs transition flex items-center justify-center gap-2 border border-slate-800"
+              >
+                <Download className="w-4 h-4 text-cyan-400" />
+                <span>Export EHR Report (PDF / FHIR)</span>
               </button>
             </div>
           </div>
@@ -626,7 +675,10 @@ You can ask me **any health-related question** about your test values, medical t
             <div className="bg-white rounded-2xl p-2 border border-slate-200/80 shadow-xs flex items-center justify-between gap-2">
               <div className="flex items-center gap-1.5">
                 <button
-                  onClick={() => setActiveViewMode('EASY_READ')}
+                  onClick={() => {
+                    stopAudio();
+                    setActiveViewMode('EASY_READ');
+                  }}
                   className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
                     activeViewMode === 'EASY_READ'
                       ? 'bg-sky-600 text-white shadow-xs'
@@ -639,8 +691,8 @@ You can ask me **any health-related question** about your test values, medical t
 
                 <button
                   onClick={() => {
+                    stopAudio();
                     setActiveViewMode('LISTEN');
-                    if (!isPlayingAudio) startVoiceNarration();
                   }}
                   className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
                     activeViewMode === 'LISTEN'
@@ -656,7 +708,10 @@ You can ask me **any health-related question** about your test values, medical t
                 </button>
 
                 <button
-                  onClick={() => setActiveViewMode('ASK_AI')}
+                  onClick={() => {
+                    stopAudio();
+                    setActiveViewMode('ASK_AI');
+                  }}
                   className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
                     activeViewMode === 'ASK_AI'
                       ? 'bg-sky-600 text-white shadow-xs'
@@ -696,6 +751,16 @@ You can ask me **any health-related question** about your test values, medical t
                   मराठी
                 </button>
               </div>
+
+              {/* Quick EHR Export Button */}
+              <button
+                onClick={() => setIsEhrExportOpen(true)}
+                className="hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold transition shadow-xs shrink-0"
+                title="Export Standardized EHR Report (PDF / HL7 FHIR JSON)"
+              >
+                <Download className="w-3.5 h-3.5 text-cyan-400" />
+                <span>Export EHR</span>
+              </button>
             </div>
 
             {/* TAB 1: EASY READ SUMMARY */}
@@ -948,38 +1013,51 @@ You can ask me **any health-related question** about your test values, medical t
                     </div>
                   </div>
 
-                  {/* Player Controls (Play, Pause, Replay, Speed, Stop) */}
+                  {/* Player Controls (Separate Play, Pause/Resume, Stop, Replay, Speed) */}
                   <div className="flex flex-wrap items-center justify-between gap-4 pt-2">
                     <div className="flex items-center gap-3">
-                      {/* Play / Pause */}
+                      {/* Play Button (Disabled while speaking, plays once) */}
+                      <button
+                        onClick={() => startVoiceNarration()}
+                        disabled={isPlayingAudio}
+                        className="px-5 py-3.5 rounded-2xl bg-cyan-500 hover:bg-cyan-400 disabled:opacity-50 disabled:cursor-not-allowed active:scale-95 text-slate-950 flex items-center gap-2 shadow-lg shadow-cyan-500/30 transition font-black text-xs"
+                        title={isPlayingAudio ? 'Speech in progress' : 'Listen to Summary'}
+                      >
+                        <Play className="w-4 h-4 fill-slate-950 ml-0.5" />
+                        <span>{isPlayingAudio ? 'Speaking Summary...' : 'Play Summary'}</span>
+                      </button>
+
+                      {/* Pause / Resume */}
                       <button
                         onClick={togglePauseAudio}
-                        className="w-14 h-14 rounded-2xl bg-cyan-500 hover:bg-cyan-400 active:scale-95 text-slate-950 flex items-center justify-center shadow-lg shadow-cyan-500/30 transition font-black"
-                        title={isPlayingAudio && !isPausedAudio ? 'Pause' : 'Play'}
+                        disabled={!isPlayingAudio}
+                        className="p-3.5 rounded-2xl bg-slate-800 hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed text-slate-300 hover:text-white transition"
+                        title={isPausedAudio ? 'Resume' : 'Pause'}
                       >
-                        {isPlayingAudio && !isPausedAudio ? (
-                          <Pause className="w-6 h-6 fill-slate-950" />
-                        ) : (
-                          <Play className="w-6 h-6 fill-slate-950 ml-0.5" />
-                        )}
+                        {isPausedAudio ? <Play className="w-4 h-4" /> : <Pause className="w-4 h-4" />}
+                      </button>
+
+                      {/* Stop Button (Cancels immediately) */}
+                      <button
+                        onClick={stopAudio}
+                        disabled={!isPlayingAudio && !isPausedAudio}
+                        className="px-4 py-3.5 rounded-2xl bg-rose-500/20 hover:bg-rose-500/30 border border-rose-500/30 disabled:opacity-30 disabled:cursor-not-allowed text-rose-300 hover:text-rose-200 transition flex items-center gap-1.5 text-xs font-bold"
+                        title="Stop audio immediately"
+                      >
+                        <VolumeX className="w-4 h-4" />
+                        <span>Stop</span>
                       </button>
 
                       {/* Replay */}
                       <button
-                        onClick={() => startVoiceNarration()}
-                        className="p-3 rounded-2xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition"
+                        onClick={() => {
+                          stopAudio();
+                          setTimeout(() => startVoiceNarration(), 60);
+                        }}
+                        className="p-3.5 rounded-2xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition"
                         title="Replay from start"
                       >
-                        <RotateCcw className="w-5 h-5" />
-                      </button>
-
-                      {/* Stop */}
-                      <button
-                        onClick={stopAudio}
-                        className="p-3 rounded-2xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition"
-                        title="Stop audio"
-                      >
-                        <VolumeX className="w-5 h-5" />
+                        <RotateCcw className="w-4 h-4" />
                       </button>
                     </div>
 
@@ -1210,6 +1288,15 @@ You can ask me **any health-related question** about your test values, medical t
             </div>
           </div>
         </div>
+      )}
+
+      {/* Standardized EHR Export Modal (HL7 FHIR R4 & PDF) */}
+      {analysis && (
+        <EhrExportModal
+          report={analysis}
+          isOpen={isEhrExportOpen}
+          onClose={() => setIsEhrExportOpen(false)}
+        />
       )}
     </div>
   );

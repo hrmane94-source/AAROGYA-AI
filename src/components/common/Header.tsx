@@ -94,11 +94,7 @@ export const Header: React.FC<HeaderProps> = ({
       {/* Top Notification / Demo Bar */}
       <div className="bg-slate-900 text-slate-200 text-xs px-4 py-1.5 flex items-center justify-between">
         <div className="flex items-center gap-2 font-medium">
-          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-amber-400/20 text-amber-300 text-[11px] font-semibold border border-amber-400/30">
-            <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
-            DEMO PROTOTYPE MODE
-          </span>
-          <span className="hidden md:inline text-slate-400">
+          <span className="text-slate-400">
             Simulated Hospital Dataset & ML Engine active for PS #16 • Predictive Bed Demand
           </span>
         </div>

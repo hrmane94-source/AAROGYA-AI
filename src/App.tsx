@@ -104,6 +104,22 @@ export default function App() {
 
   const selectedHospital = hospitals.find(h => h.id === selectedHospitalId) || hospitals[0];
 
+  // Check active server session on mount (restores authenticated cookie session)
+  useEffect(() => {
+    fetch('/api/auth/me')
+      .then(res => res.json())
+      .then(data => {
+        if (data.authenticated && data.user) {
+          setCurrentUser(data.user);
+          setCurrentRole(data.user.role);
+          if (data.user.hospitalId) {
+            setSelectedHospitalId(data.user.hospitalId);
+          }
+        }
+      })
+      .catch(() => {});
+  }, []);
+
   const handleLoginSuccess = (user: AuthUser) => {
     setCurrentUser(user);
     setCurrentRole(user.role);
@@ -115,7 +131,12 @@ export default function App() {
     }
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' });
+    } catch {
+      // Ignore network errors on logout
+    }
     setCurrentUser(null);
     setActiveTab('login');
   };

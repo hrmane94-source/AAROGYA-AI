@@ -44,16 +44,18 @@ export const LoginPage: React.FC<LoginPageProps> = ({
   const [selectedHospitalId, setSelectedHospitalId] = useState<string>(hospitals[0]?.id || 'hosp-1');
 
   // Form Fields
-  const [email, setEmail] = useState<string>('admin@arogya.health');
-  const [password, setPassword] = useState<string>('Arogya@2026');
-  const [phone, setPhone] = useState<string>('9820144552');
+  const [email, setEmail] = useState<string>('admin.vikram@arogya.health');
+  const [password, setPassword] = useState<string>('Admin@BedMgmt2026');
+  const [countryCode, setCountryCode] = useState<string>('+91');
+  const [phone, setPhone] = useState<string>('9820188000');
   const [showPassword, setShowPassword] = useState<boolean>(false);
   const [rememberMe, setRememberMe] = useState<boolean>(true);
 
   // OTP State
   const [otpSent, setOtpSent] = useState<boolean>(false);
   const [otpCode, setOtpCode] = useState<string[]>(['', '', '', '', '', '']);
-  const [otpTimer, setOtpTimer] = useState<number>(45);
+  const [otpTimer, setOtpTimer] = useState<number>(0);
+  const [isSendingOtp, setIsSendingOtp] = useState<boolean>(false);
 
   // Smart Card / Badge Scan Simulation State
   const [isScanningBadge, setIsScanningBadge] = useState<boolean>(false);
@@ -70,6 +72,16 @@ export const LoginPage: React.FC<LoginPageProps> = ({
   // Loading State
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [devOtpNotice, setDevOtpNotice] = useState<{ code: string; notice?: string } | null>(null);
+
+  // Helper to normalize phone
+  const getNormalizedPhone = () => {
+    const digits = phone.replace(/\D/g, '');
+    if (countryCode === '+91') {
+      return `+91${digits.slice(-10)}`;
+    }
+    return `${countryCode}${digits}`;
+  };
 
   // Sync default credentials when role changes
   useEffect(() => {
@@ -98,7 +110,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
     let interval: NodeJS.Timeout;
     if (otpSent && otpTimer > 0) {
       interval = setInterval(() => {
-        setOtpTimer(prev => prev - 1);
+        setOtpTimer(prev => (prev > 0 ? prev - 1 : 0));
       }, 1000);
     }
     return () => clearInterval(interval);
@@ -106,89 +118,119 @@ export const LoginPage: React.FC<LoginPageProps> = ({
 
   const selectedHospital = hospitals.find(h => h.id === selectedHospitalId) || hospitals[0];
 
-  const handlePasswordLogin = (e: React.FormEvent) => {
+  const handlePasswordLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
     setErrorMessage(null);
 
-    setTimeout(() => {
-      setIsLoading(false);
-      const user: AuthUser = {
-        id: `usr-${Date.now()}`,
-        name:
-          selectedRole === 'admin'
-            ? 'Dr. Vikram Malhotra'
-            : selectedRole === 'hospital_staff'
-            ? 'Nurse Supervisor Anjali Nair'
-            : selectedRole === 'sysadmin'
-            ? 'Rajiv Mehta (Lead DevOps)'
-            : 'Suhani Shambwani',
-        email,
-        phone,
-        role: selectedRole,
-        hospitalId: selectedHospital.id,
-        hospitalName: selectedHospital.name,
-        department:
-          selectedRole === 'admin'
-            ? 'Hospital Administration & Chief Medical Office'
-            : selectedRole === 'hospital_staff'
-            ? 'Bed Management & Emergency Triage'
-            : selectedRole === 'sysadmin'
-            ? 'Cloud Infrastructure & ML Pipelines'
-            : 'Outpatient Care',
-        designation:
-          selectedRole === 'admin'
-            ? 'Chief Medical Officer & Administrator'
-            : selectedRole === 'hospital_staff'
-            ? 'Senior Bed Allocation Manager'
-            : selectedRole === 'sysadmin'
-            ? 'System Infrastructure Architect'
-            : 'Patient / Healthcare Consumer',
-        badgeNumber: selectedRole !== 'patient' ? `AROGYA-${selectedRole.toUpperCase().slice(0, 3)}-${Math.floor(100 + Math.random() * 900)}` : undefined,
-        abhaId: selectedRole === 'patient' ? '91-4421-8890-1234' : undefined,
-        isLoggedIn: true,
-      };
+    try {
+      const res = await fetch('/api/auth/login-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          identifier: email,
+          password,
+          role: selectedRole,
+        }),
+      });
 
-      onLoginSuccess(user);
-    }, 600);
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        setErrorMessage(data.error || 'Authentication failed.');
+      } else if (data.authenticated && data.user) {
+        onLoginSuccess(data.user);
+      }
+    } catch {
+      setErrorMessage('Network error during authentication.');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
-  const handleSendOtp = () => {
-    if (!phone || phone.length < 10) {
-      setErrorMessage('Please enter a valid 10-digit mobile number or ABHA ID.');
+  const handleSendOtp = async () => {
+    const digits = phone.replace(/\D/g, '');
+    if (digits.length < 7) {
+      setErrorMessage('Please enter a valid mobile number.');
       return;
     }
-    setOtpSent(true);
-    setOtpTimer(45);
+
+    setIsSendingOtp(true);
     setErrorMessage(null);
+
+    try {
+      const fullPhone = getNormalizedPhone();
+      const res = await fetch('/api/auth/send-otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: fullPhone, purpose: 'LOGIN' }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok || !data.success) {
+        setErrorMessage(data.error || 'Failed to dispatch OTP via SMSLocal gateway.');
+      } else {
+        setOtpSent(true);
+        setOtpTimer(data.cooldownSeconds || 60);
+        if (data.devOtp) {
+          const digits = data.devOtp.split('').slice(0, 6);
+          while (digits.length < 6) digits.push('');
+          setOtpCode(digits);
+          setDevOtpNotice({ code: data.devOtp, notice: data.dltNotice || data.warning });
+        } else {
+          setOtpCode(['', '', '', '', '', '']);
+          setDevOtpNotice(null);
+        }
+      }
+    } catch {
+      setErrorMessage('Network error connecting to SMS authentication service.');
+    } finally {
+      setIsSendingOtp(false);
+    }
   };
 
-  const handleAutoFillDemoOtp = () => {
-    setOtpCode(['8', '8', '4', '2', '1', '0']);
-  };
-
-  const handleVerifyOtp = (e: React.FormEvent) => {
+  const handleVerifyOtp = async (e: React.FormEvent) => {
     e.preventDefault();
+    const code = otpCode.join('').trim();
+    if (code.length !== 6) {
+      setErrorMessage('Please enter all 6 digits of the OTP.');
+      return;
+    }
+
     setIsLoading(true);
+    setErrorMessage(null);
 
-    setTimeout(() => {
+    try {
+      const fullPhone = getNormalizedPhone();
+      const res = await fetch('/api/auth/verify-otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: fullPhone, otp: code }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok || !data.success) {
+        setErrorMessage(data.error || 'Invalid OTP code.');
+        setIsLoading(false);
+        return;
+      }
+
+      if (data.requiresRegistration) {
+        setRegPhone(fullPhone);
+        setAuthMode('REGISTER');
+        setIsLoading(false);
+        return;
+      }
+
+      if (data.authenticated && data.user) {
+        onLoginSuccess(data.user);
+      }
+    } catch {
+      setErrorMessage('Verification failed due to a network error.');
+    } finally {
       setIsLoading(false);
-      const user: AuthUser = {
-        id: `usr-otp-${Date.now()}`,
-        name: selectedRole === 'patient' ? 'Suhani Shambwani' : 'Authorized Healthcare Staff',
-        email: `${phone}@arogya.health`,
-        phone,
-        role: selectedRole,
-        hospitalId: selectedHospital.id,
-        hospitalName: selectedHospital.name,
-        department: 'Verified Mobile Login',
-        designation: selectedRole === 'patient' ? 'Verified Patient' : 'Healthcare Worker',
-        abhaId: '91-8842-1099-5561',
-        isLoggedIn: true,
-      };
-
-      onLoginSuccess(user);
-    }, 600);
+    }
   };
 
   const handleSimulateSmartCardScan = () => {
@@ -541,45 +583,99 @@ export const LoginPage: React.FC<LoginPageProps> = ({
               </form>
             )}
 
-            {/* FORM B: MOBILE OTP AUTHENTICATION */}
+            {/* FORM B: REAL MOBILE OTP AUTHENTICATION (SMSLocal Integration) */}
             {authMode === 'OTP' && (
               <form onSubmit={handleVerifyOtp} className="mt-5 space-y-4 text-xs">
                 <div>
                   <label className="font-bold text-slate-700 block mb-1">
-                    Enter Mobile Number or ABHA Health ID
+                    Mobile Phone Number
                   </label>
                   <div className="flex gap-2">
+                    {/* Country Code Selector */}
+                    <div className="relative w-28 shrink-0">
+                      <select
+                        value={countryCode}
+                        onChange={e => {
+                          setCountryCode(e.target.value);
+                          setOtpSent(false);
+                        }}
+                        className="w-full py-2.5 px-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-sky-500"
+                      >
+                        <option value="+91">🇮🇳 +91 (IN)</option>
+                        <option value="+1">🇺🇸 +1 (US)</option>
+                        <option value="+44">🇬🇧 +44 (UK)</option>
+                        <option value="+971">🇦🇪 +971 (AE)</option>
+                        <option value="+65">🇸🇬 +65 (SG)</option>
+                        <option value="+61">🇦🇺 +61 (AU)</option>
+                      </select>
+                    </div>
+
                     <div className="relative flex-1">
                       <Phone className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
                       <input
                         type="tel"
                         value={phone}
-                        onChange={e => setPhone(e.target.value)}
+                        onChange={e => {
+                          setPhone(e.target.value);
+                          if (otpSent) setOtpSent(false);
+                        }}
                         placeholder="10-digit mobile number"
                         className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 font-mono"
                       />
                     </div>
+
                     <button
                       type="button"
                       onClick={handleSendOtp}
-                      className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-xl text-xs shrink-0"
+                      disabled={isSendingOtp || otpTimer > 0}
+                      className={`px-4 py-2 rounded-xl text-xs font-bold shrink-0 transition flex items-center gap-1.5 ${
+                        otpTimer > 0
+                          ? 'bg-slate-100 text-slate-400 cursor-not-allowed border border-slate-200'
+                          : 'bg-slate-900 hover:bg-slate-800 text-white'
+                      }`}
                     >
-                      {otpSent ? 'Resend' : 'Send OTP'}
+                      {isSendingOtp && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
+                      <span>{otpSent ? (otpTimer > 0 ? `${otpTimer}s` : 'Resend OTP') : 'Send OTP'}</span>
                     </button>
                   </div>
+                  <p className="text-[10px] text-slate-500 mt-1 pl-1 flex items-center justify-between">
+                    <span>One-time password dispatched via SMSLocal gateway</span>
+                    <span className="text-sky-700 font-medium">E.164: {getNormalizedPhone()}</span>
+                  </p>
                 </div>
 
                 {otpSent && (
-                  <div className="p-4 bg-sky-50/60 rounded-2xl border border-sky-200/70 space-y-3">
+                  <div className="p-4 bg-sky-50/60 rounded-2xl border border-sky-200/70 space-y-3 animate-fadeIn">
+                    {devOtpNotice && (
+                      <div className="p-2.5 bg-amber-50/90 border border-amber-200 rounded-xl text-xs space-y-1 animate-fadeIn">
+                        <div className="flex items-center justify-between">
+                          <span className="font-bold text-amber-950 flex items-center gap-1.5">
+                            <Sparkles className="w-3.5 h-3.5 text-amber-600" />
+                            <span>SMS Gateway Notice</span>
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const digits = devOtpNotice.code.split('').slice(0, 6);
+                              while (digits.length < 6) digits.push('');
+                              setOtpCode(digits);
+                            }}
+                            className="px-2 py-0.5 rounded-lg bg-amber-200 hover:bg-amber-300 text-amber-950 font-mono font-bold text-[11px] transition shadow-2xs"
+                          >
+                            Fill OTP: {devOtpNotice.code}
+                          </button>
+                        </div>
+                        <p className="text-[11px] text-amber-800 leading-snug">
+                          {devOtpNotice.notice}
+                        </p>
+                      </div>
+                    )}
+
                     <div className="flex items-center justify-between">
                       <span className="font-bold text-sky-950">Enter 6-Digit Verification Code</span>
-                      <button
-                        type="button"
-                        onClick={handleAutoFillDemoOtp}
-                        className="text-[10px] font-bold text-sky-700 bg-white px-2 py-0.5 rounded-md border border-sky-200 shadow-2xs hover:bg-sky-50"
-                      >
-                        ⚡ Auto-fill Demo OTP (884210)
-                      </button>
+                      <span className="text-[11px] font-bold text-sky-700 font-mono">
+                        Valid for 5 mins
+                      </span>
                     </div>
 
                     <div className="flex justify-center gap-2">
@@ -590,25 +686,52 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                           maxLength={1}
                           value={digit}
                           onChange={e => {
-                            const val = e.target.value;
+                            const val = e.target.value.replace(/\D/g, '');
                             const newOtp = [...otpCode];
                             newOtp[idx] = val;
                             setOtpCode(newOtp);
+                            // Auto-advance to next input box
+                            if (val && idx < 5) {
+                              const nextInput = document.getElementById(`login-otp-cell-${idx + 1}`);
+                              nextInput?.focus();
+                            }
                           }}
+                          onKeyDown={e => {
+                            if (e.key === 'Backspace' && !digit && idx > 0) {
+                              const prevInput = document.getElementById(`login-otp-cell-${idx - 1}`);
+                              prevInput?.focus();
+                            }
+                          }}
+                          id={`login-otp-cell-${idx}`}
                           className="w-10 h-12 bg-white border border-slate-300 rounded-xl text-center text-lg font-black font-mono text-slate-900 focus:ring-2 focus:ring-sky-500 focus:outline-hidden shadow-xs"
                         />
                       ))}
                     </div>
 
                     <div className="flex justify-between items-center text-[11px] text-slate-500 pt-1">
-                      <span>Code expires in: <strong>{otpTimer}s</strong></span>
-                      <span className="text-slate-400">Demo Code: 884210</span>
+                      <span>Recipient: <strong>{getNormalizedPhone()}</strong></span>
+                      {otpTimer > 0 ? (
+                        <span>Resend in: <strong>{otpTimer}s</strong></span>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={handleSendOtp}
+                          disabled={isLoading}
+                          className="font-bold text-sky-700 hover:text-sky-900 hover:underline"
+                        >
+                          Resend OTP Code
+                        </button>
+                      )}
                     </div>
 
                     <button
                       type="submit"
-                      disabled={isLoading}
-                      className="w-full py-3 rounded-xl bg-sky-600 hover:bg-sky-700 text-white font-bold text-xs shadow-md transition flex items-center justify-center gap-2"
+                      disabled={isLoading || otpCode.join('').length !== 6}
+                      className={`w-full py-3 rounded-xl font-bold text-xs shadow-md transition flex items-center justify-center gap-2 ${
+                        otpCode.join('').length === 6 && !isLoading
+                          ? 'bg-sky-600 hover:bg-sky-700 text-white'
+                          : 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                      }`}
                     >
                       {isLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
                       <span>Verify & Enter Dashboard</span>
