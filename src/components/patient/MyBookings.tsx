@@ -102,6 +102,12 @@ export const MyBookings: React.FC<MyBookingsProps> = ({
                         Position #{token.queuePosition} (Wait: ~{token.estimatedWaitMins}m)
                       </span>
                     </div>
+                    <div className="flex justify-between items-center pt-1 border-t border-slate-100">
+                      <span className="text-[11px] text-slate-500">Nominal Fee:</span>
+                      <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
+                        ✓ ₹{token.feeAmount || 100} Paid via UPI ({token.transactionRef || 'ajinkya70280@okicici'})
+                      </span>
+                    </div>
                   </div>
                 </div>
 
@@ -171,6 +177,13 @@ export const MyBookings: React.FC<MyBookingsProps> = ({
                     <p className="text-[11px] text-slate-500 italic">
                       &ldquo;{req.reason}&rdquo;
                     </p>
+
+                    <div className="pt-1.5 flex items-center gap-2">
+                      <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
+                        <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                        <span>Deposit Verified: ₹{req.feeAmount || 100} Paid via UPI ({req.transactionRef || 'ajinkya70280@okicici'})</span>
+                      </span>
+                    </div>
                   </div>
 
                   <div className="text-left sm:text-right shrink-0">

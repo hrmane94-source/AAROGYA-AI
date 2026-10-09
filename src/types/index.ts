@@ -205,6 +205,11 @@ export interface OPDToken {
   qrCodeHash: string;
   createdAt: string;
   priority: 'REGULAR' | 'SENIOR' | 'EMERGENCY_TRIAGE';
+  feeAmount?: number;
+  paymentStatus?: 'PAID' | 'PENDING';
+  upiId?: string;
+  transactionRef?: string;
+  paymentTime?: string;
 }
 
 export interface BedRequest {
@@ -223,6 +228,11 @@ export interface BedRequest {
   attendantName: string;
   status: 'PENDING_CONFIRMATION' | 'APPROVED' | 'BED_ALLOCATED' | 'REJECTED';
   allocatedBedNumber?: string;
+  feeAmount?: number;
+  paymentStatus?: 'PAID' | 'PENDING';
+  upiId?: string;
+  transactionRef?: string;
+  paymentTime?: string;
   submittedAt: string;
   updatedAt: string;
 }

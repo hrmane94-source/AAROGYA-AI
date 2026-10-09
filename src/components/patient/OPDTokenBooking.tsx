@@ -18,6 +18,12 @@ import {
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { Hospital, Doctor, OPDToken } from '../../types';
+import {
+  UPIPaymentModal,
+  UPIPaymentDetails,
+  NOMINAL_FEE,
+  UPI_ID
+} from '../common/UPIPaymentModal';
 
 interface OPDTokenBookingProps {
   hospitals: Hospital[];
@@ -49,6 +55,7 @@ export const OPDTokenBooking: React.FC<OPDTokenBookingProps> = ({
 
   const [generatedToken, setGeneratedToken] = useState<OPDToken | null>(null);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+  const [showPaymentModal, setShowPaymentModal] = useState<boolean>(false);
 
   const selectedHospital = hospitals.find(h => h.id === selectedHospitalId) || hospitals[0];
   const filteredDoctors = doctors.filter(d =>
@@ -56,10 +63,14 @@ export const OPDTokenBooking: React.FC<OPDTokenBookingProps> = ({
   );
   const selectedDoctor = doctors.find(d => d.id === selectedDoctorId) || filteredDoctors[0] || doctors[0];
 
-  const handleCreateToken = async (e: React.FormEvent) => {
+  const handleOpenPayment = (e: React.FormEvent) => {
     e.preventDefault();
     if (!patientName || !patientPhone) return;
+    setShowPaymentModal(true);
+  };
 
+  const handlePaymentCompleted = async (paymentDetails: UPIPaymentDetails) => {
+    setShowPaymentModal(false);
     setIsSubmitting(true);
 
     const symptomsList = symptomsInput
@@ -81,6 +92,11 @@ export const OPDTokenBooking: React.FC<OPDTokenBookingProps> = ({
       reasonForVisit: reasonForVisit || 'Routine Clinical Follow-up',
       symptoms: symptomsList,
       priority: 'REGULAR',
+      feeAmount: paymentDetails.feeAmount,
+      paymentStatus: 'PAID',
+      upiId: paymentDetails.upiId,
+      transactionRef: paymentDetails.transactionRef,
+      paymentTime: paymentDetails.paymentTime,
     };
 
     try {
@@ -333,14 +349,21 @@ export const OPDTokenBooking: React.FC<OPDTokenBookingProps> = ({
 
       {/* STEP 3: Patient Details & Reason for Visit */}
       {step === 3 && !generatedToken && (
-        <form onSubmit={handleCreateToken} className="bg-white rounded-3xl p-6 sm:p-7 border border-slate-200/80 shadow-xs space-y-5">
-          <div>
-            <h3 className="text-lg font-black text-slate-900">
-              Step 3: Patient Information & Visit Reason
-            </h3>
-            <p className="text-xs text-slate-500">
-              Provide basic patient details and reason for consultation to help the doctor prepare.
-            </p>
+        <form onSubmit={handleOpenPayment} className="bg-white rounded-3xl p-6 sm:p-7 border border-slate-200/80 shadow-xs space-y-5">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-4">
+            <div>
+              <h3 className="text-lg font-black text-slate-900">
+                Step 3: Patient Information & Visit Reason
+              </h3>
+              <p className="text-xs text-slate-500">
+                Provide basic patient details and reason for consultation to help the doctor prepare.
+              </p>
+            </div>
+            <div className="bg-teal-50 border border-teal-200 rounded-2xl px-3.5 py-2 text-right">
+              <span className="text-[10px] text-teal-800 uppercase block font-bold">Nominal Confirmation Fee</span>
+              <span className="text-lg font-black text-teal-900 font-mono">₹{NOMINAL_FEE}</span>
+              <span className="text-[10px] text-teal-700 block">via UPI (100% Adjustable)</span>
+            </div>
           </div>
 
           <div className="space-y-4 text-xs">
@@ -424,8 +447,15 @@ export const OPDTokenBooking: React.FC<OPDTokenBookingProps> = ({
               />
             </div>
 
-            <div className="p-3 bg-amber-50 rounded-xl border border-amber-200 text-[11px] text-amber-900">
-              ℹ️ Arogya AI records your symptoms for your doctor&apos;s review. We never diagnose illnesses or prescribe medication online.
+            {/* Fee Adjustment & Anti-Spam Notice */}
+            <div className="p-3.5 bg-linear-to-r from-teal-50 to-sky-50 rounded-2xl border border-teal-200/80 text-[11px] text-teal-950 space-y-1">
+              <div className="font-bold flex items-center gap-1.5 text-teal-900">
+                <ShieldCheck className="w-4 h-4 text-teal-700" />
+                <span>Nominal ₹{NOMINAL_FEE} UPI Confirmation Policy:</span>
+              </div>
+              <p className="leading-relaxed text-slate-600">
+                To guarantee your queue slot with <strong>{selectedDoctor.name}</strong>, a nominal verification fee of <strong>₹{NOMINAL_FEE}</strong> is paid via UPI to <strong>{UPI_ID}</strong>. The entire ₹{NOMINAL_FEE} is adjusted against the doctor&apos;s consultation fee (₹{selectedDoctor.fee}), leaving only <strong>₹{Math.max(0, selectedDoctor.fee - NOMINAL_FEE)}</strong> payable upon arrival.
+              </p>
             </div>
           </div>
 
@@ -440,10 +470,10 @@ export const OPDTokenBooking: React.FC<OPDTokenBookingProps> = ({
             <button
               type="submit"
               disabled={isSubmitting}
-              className="px-6 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold shadow-md flex items-center gap-1.5"
+              className="px-6 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold shadow-md flex items-center gap-2"
             >
               <Ticket className="w-4 h-4" />
-              <span>{isSubmitting ? 'Reserving Token...' : 'Generate Digital OPD Token'}</span>
+              <span>Proceed to Pay ₹{NOMINAL_FEE} & Confirm Token</span>
             </button>
           </div>
         </form>
@@ -504,6 +534,23 @@ export const OPDTokenBooking: React.FC<OPDTokenBookingProps> = ({
               </div>
             </div>
 
+            {/* Verified Payment Strip */}
+            <div className="bg-emerald-950/70 border border-emerald-500/40 rounded-2xl p-3 my-4 space-y-1">
+              <div className="flex items-center justify-between text-[11px]">
+                <span className="inline-flex items-center gap-1.5 font-bold text-emerald-300">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Fee Verified: ₹{generatedToken.feeAmount || NOMINAL_FEE} Paid</span>
+                </span>
+                <span className="font-mono text-[10px] text-emerald-200">
+                  Ref: {generatedToken.transactionRef || 'UPI-CONFIRMED'}
+                </span>
+              </div>
+              <div className="flex justify-between items-center text-[10px] text-slate-300 pt-1 border-t border-emerald-800/40">
+                <span>Paid via UPI to: <strong>{generatedToken.upiId || UPI_ID}</strong></span>
+                <span className="text-emerald-300">Adjusted in OPD invoice</span>
+              </div>
+            </div>
+
             {/* QR Code Graphic Box */}
             <div className="pt-4 border-t border-white/10 flex items-center justify-between">
               <div className="space-y-1">
@@ -529,7 +576,7 @@ export const OPDTokenBooking: React.FC<OPDTokenBookingProps> = ({
               className="px-5 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold transition flex items-center gap-2"
             >
               <Printer className="w-4 h-4" />
-              <span>Print Token Pass</span>
+              <span>Print Token Pass & Receipt</span>
             </button>
             <button
               onClick={() => {
@@ -549,6 +596,22 @@ export const OPDTokenBooking: React.FC<OPDTokenBookingProps> = ({
           </div>
         </div>
       )}
+
+      {/* UPI Nominal Fee Payment Modal */}
+      <UPIPaymentModal
+        isOpen={showPaymentModal}
+        onClose={() => setShowPaymentModal(false)}
+        bookingType="OPD"
+        title="Confirm OPD Token Booking"
+        subtitle="Pay nominal confirmation fee to reserve your consultation slot"
+        detailsSummary={{
+          patientName,
+          hospitalName: selectedHospital.name,
+          department: selectedDepartment,
+          slotOrCategory: `${selectedDoctor.name} • ${selectedTimeSlot}`,
+        }}
+        onPaymentSuccess={handlePaymentCompleted}
+      />
     </div>
   );
 };

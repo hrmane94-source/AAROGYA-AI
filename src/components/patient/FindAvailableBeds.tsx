@@ -12,9 +12,16 @@ import {
   Send,
   Sparkles,
   Info,
-  ChevronRight
+  ChevronRight,
+  ShieldCheck
 } from 'lucide-react';
 import { Hospital, BedRequest } from '../../types';
+import {
+  UPIPaymentModal,
+  UPIPaymentDetails,
+  NOMINAL_FEE,
+  UPI_ID
+} from '../common/UPIPaymentModal';
 
 interface FindAvailableBedsProps {
   hospitals: Hospital[];
@@ -42,6 +49,8 @@ export const FindAvailableBeds: React.FC<FindAvailableBedsProps> = ({
   const [urgency, setUrgency] = useState<'ELECTIVE' | 'URGENT' | 'CRITICAL_EMERGENCY'>('URGENT');
   const [reason, setReason] = useState('');
   const [showSuccessToast, setShowSuccessToast] = useState(false);
+  const [showPaymentModal, setShowPaymentModal] = useState(false);
+  const [lastPaymentRef, setLastPaymentRef] = useState('');
 
   const filteredHospitals = hospitals.filter(h => {
     const matchesSearch =
@@ -54,6 +63,14 @@ export const FindAvailableBeds: React.FC<FindAvailableBedsProps> = ({
   const handleSubmitRequest = (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedHospitalForModal || !patientName || !contactNumber) return;
+    setShowPaymentModal(true);
+  };
+
+  const handlePaymentCompleted = (paymentDetails: UPIPaymentDetails) => {
+    setShowPaymentModal(false);
+    if (!selectedHospitalForModal) return;
+
+    setLastPaymentRef(paymentDetails.transactionRef);
 
     onRequestBed({
       patientName,
@@ -67,11 +84,16 @@ export const FindAvailableBeds: React.FC<FindAvailableBedsProps> = ({
       bedCategory,
       urgency,
       reason: reason || 'Bed request submitted via Patient Portal',
+      feeAmount: paymentDetails.feeAmount,
+      paymentStatus: 'PAID',
+      upiId: paymentDetails.upiId,
+      transactionRef: paymentDetails.transactionRef,
+      paymentTime: paymentDetails.paymentTime,
     });
 
     setSelectedHospitalForModal(null);
     setShowSuccessToast(true);
-    setTimeout(() => setShowSuccessToast(false), 4000);
+    setTimeout(() => setShowSuccessToast(false), 5000);
 
     // Reset fields
     setPatientName('');
@@ -83,11 +105,13 @@ export const FindAvailableBeds: React.FC<FindAvailableBedsProps> = ({
     <div className="space-y-6">
       {/* Toast Notification */}
       {showSuccessToast && (
-        <div className="fixed top-20 right-6 z-50 bg-emerald-900 text-white px-5 py-3.5 rounded-2xl shadow-2xl border border-emerald-500/40 flex items-center gap-3 text-xs animate-bounce">
-          <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />
+        <div className="fixed top-20 right-6 z-50 bg-emerald-900 text-white px-5 py-4 rounded-2xl shadow-2xl border border-emerald-500/40 flex items-center gap-3 text-xs animate-bounce max-w-md">
+          <CheckCircle2 className="w-6 h-6 text-emerald-400 shrink-0" />
           <div>
-            <div className="font-bold">Bed Request Submitted Successfully!</div>
-            <div className="text-emerald-200">The hospital bed triage team has been notified for confirmation.</div>
+            <div className="font-bold text-sm">Bed Request & ₹{NOMINAL_FEE} Payment Confirmed!</div>
+            <div className="text-emerald-200 mt-0.5">
+              Paid via UPI ({UPI_ID}) • Ref: {lastPaymentRef || 'CONFIRMED'}. Hospital triage team has been alerted for bed allocation.
+            </div>
           </div>
         </div>
       )}
@@ -365,8 +389,24 @@ export const FindAvailableBeds: React.FC<FindAvailableBedsProps> = ({
                 />
               </div>
 
-              <div className="p-3 bg-amber-50 rounded-xl border border-amber-200 text-[11px] text-amber-900 leading-snug">
-                ⚠️ Arogya AI coordinates with hospital bed managers. Final admission is subject to physical triage verification upon arrival.
+              {/* Fee Adjustment & Anti-Spam Notice */}
+              <div className="p-3.5 bg-sky-50 rounded-2xl border border-sky-200 text-[11px] text-sky-950 space-y-1">
+                <div className="font-bold flex items-center justify-between text-sky-900">
+                  <div className="flex items-center gap-1.5">
+                    <ShieldCheck className="w-4 h-4 text-sky-700" />
+                    <span>Nominal Bed Reservation Fee:</span>
+                  </div>
+                  <span className="font-mono font-black text-xs text-sky-900 bg-sky-100 px-2 py-0.5 rounded-md">
+                    ₹{NOMINAL_FEE} via UPI
+                  </span>
+                </div>
+                <p className="leading-relaxed text-slate-600">
+                  A nominal fee of <strong>₹{NOMINAL_FEE}</strong> payable to <strong>{UPI_ID}</strong> verifies your bed request and alerts hospital emergency triage. The entire ₹{NOMINAL_FEE} is credited directly towards your hospital admission deposit.
+                </p>
+              </div>
+
+              <div className="p-2.5 bg-amber-50 rounded-xl border border-amber-200 text-[10px] text-amber-900 leading-snug">
+                ⚠️ Final admission is confirmed upon clinical triage verification by hospital staff.
               </div>
 
               <div className="pt-2 flex items-center justify-end gap-3">
@@ -379,15 +419,33 @@ export const FindAvailableBeds: React.FC<FindAvailableBedsProps> = ({
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2.5 rounded-xl bg-sky-600 hover:bg-sky-700 text-white text-xs font-bold shadow-md flex items-center gap-1.5"
+                  className="px-5 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold shadow-md flex items-center gap-2"
                 >
                   <Send className="w-3.5 h-3.5" />
-                  <span>Submit Bed Request</span>
+                  <span>Proceed to Pay ₹{NOMINAL_FEE} & Submit</span>
                 </button>
               </div>
             </form>
           </div>
         </div>
+      )}
+
+      {/* UPI Payment Modal for Bed Request */}
+      {selectedHospitalForModal && (
+        <UPIPaymentModal
+          isOpen={showPaymentModal}
+          onClose={() => setShowPaymentModal(false)}
+          bookingType="BED"
+          title="Confirm Bed Admission Request"
+          subtitle="Pay nominal confirmation fee via UPI to initiate bed triage"
+          detailsSummary={{
+            patientName: patientName || 'Patient',
+            hospitalName: selectedHospitalForModal.name,
+            department: department,
+            slotOrCategory: `${bedCategory} Ward (${urgency.replace('_', ' ')})`,
+          }}
+          onPaymentSuccess={handlePaymentCompleted}
+        />
       )}
     </div>
   );

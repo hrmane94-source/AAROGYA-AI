@@ -234,6 +234,11 @@ export default function App() {
       qrCodeHash: `AROGYA-OPD-${Date.now()}`,
       createdAt: new Date().toISOString(),
       priority: 'REGULAR',
+      feeAmount: tokenData.feeAmount || 100,
+      paymentStatus: tokenData.paymentStatus || 'PAID',
+      upiId: tokenData.upiId || 'ajinkya70280@okicici',
+      transactionRef: tokenData.transactionRef || `UPI-AJI-${Date.now().toString().slice(-6)}`,
+      paymentTime: tokenData.paymentTime || new Date().toISOString(),
     };
     setOpdTokens(prev => [fallbackToken, ...prev]);
     return fallbackToken;
@@ -262,6 +267,11 @@ export default function App() {
       ...reqData,
       id: `req-${Date.now()}`,
       status: 'PENDING_CONFIRMATION',
+      feeAmount: reqData.feeAmount || 100,
+      paymentStatus: reqData.paymentStatus || 'PAID',
+      upiId: reqData.upiId || 'ajinkya70280@okicici',
+      transactionRef: reqData.transactionRef || `BED-UPI-${Date.now().toString().slice(-6)}`,
+      paymentTime: reqData.paymentTime || new Date().toISOString(),
       submittedAt: 'Just now',
       updatedAt: 'Just now',
     };
